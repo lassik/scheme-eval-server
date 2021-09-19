@@ -59,7 +59,8 @@
            (tar-string 32 "root")
            (tar-octal 8 0)
            (tar-octal 8 0)
-           (tar-string 155 "")))
+           (tar-string 155 "")
+           (make-bytevector 12 0)))
          (blank-checksum
           (make-bytevector 7 (char->integer #\space)))
          (checksum
