@@ -11,6 +11,8 @@
 (define implementations
   '(("gauche" '("gosh" "-r" "7"))))
 
+(define implementation-name first)
+
 (define tar-content-type "application/x-tar")
 
 (define (tar-content-type? symbol)
@@ -92,7 +94,8 @@
   (send-response
    status: 'ok
    body: (bytevector->string
-          (let ((bytes (string->utf8 "Hello world")))
+          (let ((bytes (string->utf8
+                        (string-append "Hello " (implementation-name impl)))))
             (bytevector-append
              (bytevector-append
               (make-tar-header-for-regular-file "proc/fd/1" bytes)
