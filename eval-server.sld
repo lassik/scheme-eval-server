@@ -3,8 +3,11 @@
           (srfi 13)
           (srfi 98)
           (scheme base)
+          (scheme file)
           (scheme write)
           (only (chicken blob) blob->string)
+          (only (chicken file) create-temporary-directory)
+          (chicken process)
           (only (srfi 4) u8vector->blob)
           (spiffy)
           (intarweb)
@@ -13,9 +16,11 @@
   (begin
 
     (define implementations
-      '(("gauche" '("gosh" "-r" "7"))))
+      '(("chibi" ("chibi-scheme"))
+        ("gauche" ("gosh" "-r" "7"))))
 
     (define implementation-name first)
+    (define implementation-command-line second)
 
     (define (respond-with-error status string)
       (send-response status: status body: string))
@@ -42,50 +47,99 @@
                                             strings))
                 (loop a (+ b 1) strings)))))
 
+    (define (read-all-bytes port)
+      (let loop ((whole (bytevector)))
+        (let ((part (read-bytevector 10000 port)))
+          (if (eof-object? part) whole
+              (loop (bytevector-append whole part))))))
+
+    (define (parse-name-value-pair string)
+      (let loop ((i 0))
+        (cond ((= i (string-length string))
+               (error "No value"))
+              ((char=? #\= (string-ref string i))
+               (cons (string-copy string 0 i)
+                     (string-copy string (+ i 1) (string-length string))))
+              (else
+               (loop (+ i 1))))))
+
+    (define (tar-regular-file filename bytes)
+      (bytevector-append
+       (make-tar-header-for-regular-file filename bytes)
+       bytes (make-tar-padding bytes)))
+
     (define (handle-the-scheme-implementation impl)
       (let ((cmdline #f)
             (environ #f)
             (cwd (string->utf8 "/"))
-            (stdin #f))
+            (stdin (bytevector))
+            (stdout (bytevector))
+            (stderr (bytevector))
+            (files '()))
         (parameterize ((current-input-port (request-port (current-request))))
           (tar-for-each
            (lambda (entry)
              (let* ((name (tar-entry-name entry))
                     (bytes (read-tar-entry-bytes entry)))
                (write name)(newline)
-               (cond ((or (equal? "proc/" name)
+               (cond ((or (equal? "" name)
+                          (string-prefix? "/" name)
+                          (string-prefix? "." name))
+                      (error "Bad name" name))
+                     ((or (equal? "proc/" name)
                           (equal? "proc/self/" name)
                           (equal? "proc/self/fd/" name))
                       #f)
                      ((equal? "proc/self/cmdline" name)
                       (set! cmdline (parse-null-terminated-strings bytes)))
                      ((equal? "proc/self/environ" name)
-                      (set! stdin (parse-null-terminated-strings bytes)))
+                      (set! environ
+                        (map parse-name-value-pair
+                             (parse-null-terminated-strings bytes))))
                      ((equal? "proc/self/cwd" name)
-                      (set! stdin (utf8->string bytes)))
+                      (set! cwd (utf8->string bytes)))
                      ((equal? "proc/self/fd/0" name)
                       (set! stdin bytes))
                      ((string-prefix? "proc/self/fd/" name)
                       (error "Bad proc/self/fd/ on input" name))
                      ((string-prefix? "proc/" name)
-                      (error "Bad /proc entry on input")))))))
+                      (error "Bad /proc entry on input"))
+                     ((not (string-suffix? "/" name))
+                      (set! files (cons (cons name bytes)
+                                        files))))))))
         (write `(cmdline ,cmdline))(newline)
         (write `(environ ,environ))(newline)
         (write `(cwd ,cwd))(newline)
         (write `(stdin ,stdin))(newline)
+        (unless (assoc "main.scm" files)
+          (error "No main.scm file in archive"))
+        (let ((tempdir (create-temporary-directory)))
+          (write tempdir)(newline)
+          (for-each (lambda (entry)
+                      (let ((name (car entry))
+                            (bytes (cdr entry)))
+                        (call-with-port
+                         (open-binary-output-file name)
+                         (lambda (out) (write-bytevector bytes out)))))
+                    files))
+        (let ((command (append (implementation-command-line impl)
+                               (list "main.scm")
+                               cmdline)))
+          (write command)(newline)
+          (let-values (((from-sub to-sub sub-pid from-sub-err)
+                        (process* (car command) (cdr command) environ)))
+            (write-bytevector stdin to-sub)
+            (close-output-port to-sub)
+            (set! stdout (read-all-bytes from-sub))
+            (set! stderr (read-all-bytes from-sub-err))))
         (send-response
          status: 'ok
          headers: `((content-type ,tar-content-type))
          body: (bytevector->string
-                (let ((bytes (string->utf8
-                              (string-append "Hello "
-                                             (implementation-name impl)))))
-                  (bytevector-append
-                   (bytevector-append
-                    (make-tar-header-for-regular-file "proc/self/fd/1" bytes)
-                    bytes
-                    (make-tar-padding bytes))
-                   (make-tar-eof)))))))
+                (bytevector-append
+                 (tar-regular-file "proc/self/fd/1" stdout)
+                 (tar-regular-file "proc/self/fd/2" stderr)
+                 (make-tar-eof))))))
 
     (define (handle-scheme-implementation)
       (let ((path (uri-path (request-uri (current-request))))
