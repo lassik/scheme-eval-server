@@ -54,6 +54,7 @@
                       (error "Bad /proc entry on input")))))))
         (send-response
          status: 'ok
+         headers: `((content-type ,tar-content-type))
          body: (bytevector->string
                 (let ((bytes (string->utf8
                               (string-append "Hello "
