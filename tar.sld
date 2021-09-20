@@ -27,8 +27,11 @@
                  (loop (+ i 1))))))
 
     (define (read-exactly-n-bytes n)
-      (let ((bytes (read-bytevector n)))
-        (if (= n (bytevector-length bytes)) bytes (error "Short read"))))
+      (let* ((bytex (read-bytevector n))
+             (bytes (if (eof-object? bytex) (bytevector) bytex)))
+        (if (< (bytevector-length bytes) n)
+            (error "Short read / wanted / got" n (bytevector-length bytes))
+            bytes)))
 
     ;;
 
