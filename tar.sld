@@ -112,7 +112,7 @@
       (let* ((before-checksum
               (bytevector-append
                (tar-string 100 filename)
-               (tar-octal 8 #x444)
+               (tar-octal 8 #o444)
                (tar-octal 8 0)
                (tar-octal 8 0)
                (tar-octal 12 (bytevector-length bytes))
